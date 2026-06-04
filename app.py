@@ -19,7 +19,8 @@ st.markdown("""
 
 - **Page 1 — Bilan matière** : visualise ce que produit la raffinerie pour chaque brut
 - **Page 2 — Optimiseur** : trouve le mix de bruts qui maximise la marge
-
+- **Page 3 — Test Remi** : teste la fonctionnalité de la page 3
+            
 ### Comment naviguer
 Utilise le menu à gauche pour changer de page.
 """)
