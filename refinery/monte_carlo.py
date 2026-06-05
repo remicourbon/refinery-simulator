@@ -6,35 +6,40 @@ from refinery.optimizer import calcul_mbr, PRODUCT_PRICES
 from data.crudes import CRUDES
 
 
-def simuler_monte_carlo(mix: dict, n_simulations: int = 1000) -> dict:
+def simuler_monte_carlo(mix: dict,
+                        config=None,
+                        n_simulations: int = 1000) -> dict:
     """
-    Simule n_simulations scénarios de prix et calcule la MBR pour chacun.
+    Simule n_simulations scénarios de prix.
 
-    Pour chaque scénario, on fait varier :
-    - le prix de chaque brut (volatilité de 15%)
-    - le prix de chaque produit (volatilité de 10%)
+    Pour chaque scénario :
+    - les prix des bruts varient de ±15%
+    - les prix des produits varient de ±10%
+    - on ne modifie jamais les objets originaux
     """
     mbrs = []
 
     for _ in range(n_simulations):
 
-        # --- Faire varier les prix des bruts ---
-        # np.random.normal(1, 0.15) génère un chiffre autour de 1
-        # avec une variation de ±15% — comme le marché réel
-        crudes_perturbes = {}
-        for nom, crude in CRUDES.items():
-            facteur = np.random.normal(1, 0.15)
-            crude.price_usd_bbl = crude.price_usd_bbl * facteur
-            crudes_perturbes[nom] = crude
+        # Prix des bruts perturbés — copies, pas les originaux
+        prix_bruts_perturbes = {
+            nom: CRUDES[nom].price_usd_bbl * np.random.normal(1, 0.15)
+            for nom in CRUDES
+        }
 
-        # --- Faire varier les prix des produits ---
-        produits_perturbes = {}
-        for produit, prix in PRODUCT_PRICES.items():
-            facteur = np.random.normal(1, 0.10)
-            produits_perturbes[produit] = prix * facteur
+        # Prix des produits perturbés — copies, pas les originaux
+        prix_produits_perturbes = {
+            produit: prix * np.random.normal(1, 0.10)
+            for produit, prix in PRODUCT_PRICES.items()
+        }
 
-        # --- Calculer la MBR pour ce scénario ---
-        mbr = calcul_mbr(mix, capacite_kbd=100)
+        # Calcul de la MBR avec les prix perturbés
+        mbr = calcul_mbr(
+            mix,
+            config=config,
+            prix_bruts=prix_bruts_perturbes,
+            prix_produits=prix_produits_perturbes,
+        )
         mbrs.append(mbr)
 
     mbrs = np.array(mbrs)
@@ -45,3 +50,4 @@ def simuler_monte_carlo(mix: dict, n_simulations: int = 1000) -> dict:
         "var_95":        round(float(np.percentile(mbrs, 5)), 2),
         "prob_negative": round(float(np.mean(mbrs < 0) * 100), 1),
     }
+
