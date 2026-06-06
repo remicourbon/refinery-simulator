@@ -15,12 +15,26 @@ st.caption("Simulateur de marge de raffinage — Brent, Urals, Arab Light, Sahar
 st.divider()
 
 st.markdown("""
-### Ce que fait ce simulateur
+### Bienvenue
 
-- **Page 1 — Bilan matière** : visualise ce que produit la raffinerie pour chaque brut
-- **Page 2 — Optimiseur** : trouve le mix de bruts qui maximise la marge
-- **Page 3 — Test Remi** : teste la fonctionnalité de la page 3
-            
-### Comment naviguer
-Utilise le menu à gauche pour changer de page.
+Ce simulateur modélise le fonctionnement d'une raffinerie de pétrole —
+du brut entrant jusqu'aux produits finis, en passant par l'optimisation de la marge.
+
+### Les 4 pages
+
+- **⚙️ Configuration** — choisis ta raffinerie et paramètre chaque unité
+- **📊 Bilan matière** — visualise les rendements par produit selon le brut
+- **🔧 Optimiseur** — trouve le mix de bruts qui maximise la marge (MBR)
+- **🎲 Monte Carlo** — simule 1000 scénarios de prix et mesure le risque (VaR 95%)
+
+### Comment utiliser
+
+1. Commence par la page **Configuration** pour définir ta raffinerie
+2. Explore le **Bilan matière** pour comprendre les rendements
+3. Lance l'**Optimiseur** pour trouver le meilleur mix de bruts
+4. Simule le **risque** avec le Monte Carlo
+
 """)
+
+st.divider()
+st.caption("Projet Python — Remi Courbon — 2025")

@@ -1,3 +1,4 @@
+# refinery/optimizer.py
 # Optimiseur de mix brut — maximise la MBR
 # Les objets Crude ne sont jamais modifiés directement
 
@@ -19,6 +20,18 @@ PRODUCT_PRICES = {
 }
 
 
+def calcul_soufre_mix(mix: dict) -> float:
+    """
+    Calcule le soufre moyen du mix de bruts (moyenne pondérée).
+    Résultat en %poids.
+    """
+    return sum(
+        CRUDES[nom].sulfur_pct * fraction
+        for nom, fraction in mix.items()
+        if fraction > 0
+    )
+
+
 def calcul_mbr(mix: dict,
                config=None,
                prix_bruts: dict = None,
@@ -34,18 +47,15 @@ def calcul_mbr(mix: dict,
     if config is None:
         config = CONFIGS["Défaut"]
 
-    # On utilise les prix fournis, ou les prix de référence par défaut
     _prix_bruts    = prix_bruts    if prix_bruts    is not None else {n: CRUDES[n].price_usd_bbl for n in CRUDES}
     _prix_produits = prix_produits if prix_produits is not None else PRODUCT_PRICES
 
-    # Coût d'achat du brut — moyenne pondérée
     cout_brut = sum(
         _prix_bruts[nom] * fraction
         for nom, fraction in mix.items()
         if fraction > 0
     )
 
-    # Valeur des produits — bilan pour chaque brut, pondéré par sa fraction
     valeur_produits = 0.0
     cap_totale = config.cdu_capacity_kbd
 
@@ -55,7 +65,6 @@ def calcul_mbr(mix: dict,
 
         crude = CRUDES[nom]
 
-        # Config proportionnelle à la fraction du brut dans le mix
         from refinery.config import RefineryConfig
         config_fraction = RefineryConfig(
             name=config.name,
@@ -79,9 +88,10 @@ def calcul_mbr(mix: dict,
     return valeur_produits - cout_brut
 
 
-def optimiser_mix(config=None) -> dict:
+def optimiser_mix(config=None, soufre_max: float = 2.0) -> dict:
     """
     Trouve le mix optimal qui maximise la MBR.
+    soufre_max : contrainte sur le soufre moyen du mix (%poids)
     """
     if config is None:
         config = CONFIGS["Défaut"]
@@ -93,9 +103,17 @@ def optimiser_mix(config=None) -> dict:
         mix = {noms[i]: fractions[i] for i in range(n)}
         return -calcul_mbr(mix, config=config)
 
-    contraintes = {"type": "eq", "fun": lambda x: sum(x) - 1}
-    bornes      = [(0.10, 0.60)] * n
-    x0          = [1 / n] * n
+    contraintes = [
+        # Les fractions doivent sommer à 1
+        {"type": "eq", "fun": lambda x: sum(x) - 1},
+        # Le soufre moyen du mix ne dépasse pas le seuil
+        {"type": "ineq", "fun": lambda x: soufre_max - sum(
+            CRUDES[noms[i]].sulfur_pct * x[i] for i in range(n)
+        )},
+    ]
+
+    bornes = [(0.10, 0.60)] * n
+    x0     = [1 / n] * n
 
     resultat = minimize(objectif, x0, method="SLSQP",
                         bounds=bornes, constraints=contraintes)
@@ -103,5 +121,9 @@ def optimiser_mix(config=None) -> dict:
     mix_optimal  = {noms[i]: round(resultat.x[i], 3) for i in range(n)}
     mbr_optimale = round(-resultat.fun, 2)
 
-    return {"mix": mix_optimal, "mbr": mbr_optimale}
+    return {
+        "mix":    mix_optimal,
+        "mbr":    mbr_optimale,
+        "soufre": round(calcul_soufre_mix(mix_optimal), 2),
+    }
 

@@ -108,16 +108,20 @@ def run_balance(crude, config) -> pd.DataFrame:
     else:
         pool["HSFO"] += vac_resid
 
-    # ÉTAPE 7 — Mise en forme
-    total_t_h = sum(pool.values())
+# ÉTAPE 7 — Mise en forme
+    total_t_h   = sum(pool.values())
+    # kbd entrants = capacité CDU convertie en kbd réels
+    kbd_entrant = _kbd_to_t_h(config.cdu_capacity_kbd, crude.density) / crude.density * M3_TO_BBL * 24 / 1000
+
     rows = []
     for produit, t_h in pool.items():
-        pct_mt = 100 * t_h / total_t_h if total_t_h > 0 else 0
-        kbd    = t_h * BBL_PER_TON.get(produit, 7.45) * 24 / 1000
+        pct_mt  = 100 * t_h / total_t_h if total_t_h > 0 else 0
+        kbd     = t_h * BBL_PER_TON.get(produit, 7.45) * 24 / 1000
+        pct_vol = 100 * kbd / kbd_entrant if kbd_entrant > 0 else 0
         rows.append({
             "Produit": produit,
-            "t/h":     round(t_h, 1),
             "%mt":     round(pct_mt, 1),
+            "%vol":    round(pct_vol, 1),
             "kbd":     round(kbd, 2),
         })
 
