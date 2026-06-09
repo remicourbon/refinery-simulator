@@ -9,7 +9,7 @@ from refinery.optimizer import calcul_mbr
 from refinery.sidebar import render_sidebar, render_mix_sidebar
 
 st.title("📈 Évolution des marges")
-st.caption("Prix réels EIA — historique Brent, crack spreads et MBR reconstituée")
+st.caption("Prix réels EIA — MBR reconstituée, prix bruts et crack spreads")
 
 config = render_sidebar()
 mix    = render_mix_sidebar()
@@ -28,9 +28,8 @@ with st.spinner("Récupération des prix EIA..."):
     df_diesel     = get_historique_produit("Diesel",   jours)
     df_kerosene   = get_historique_produit("Kerosene", jours)
 
-# --- Prix actuels ---
-st.subheader("Prix actuels")
-
+# --- Prix actuels bruts ---
+st.subheader("Prix actuels — Bruts")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Brent",        f"{prix_bruts['Brent']} $/bbl")
 col2.metric("Urals",        f"{prix_bruts['Urals']} $/bbl",
@@ -42,6 +41,8 @@ col4.metric("Sahara Blend", f"{prix_bruts['Sahara Blend']} $/bbl",
 
 st.divider()
 
+# --- Prix actuels produits ---
+st.subheader("Prix actuels — Produits")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Diesel",   f"{prix_produits['Diesel']} $/bbl",
             f"{round(prix_produits['Diesel'] - prix_bruts['Brent'], 1)} crack")
@@ -54,52 +55,8 @@ col4.metric("HSFO",     f"{prix_produits['HSFO']} $/bbl",
 
 st.divider()
 
-# --- Courbe Brent ---
-st.subheader(f"Prix Brent — {jours} derniers jours")
-fig_brent = px.line(
-    df_brent, x="date", y="prix",
-    labels={"prix": "$/bbl", "date": "Date"},
-    color_discrete_sequence=["#f39c12"]
-)
-fig_brent.update_layout(hovermode="x unified")
-st.plotly_chart(fig_brent, use_container_width=True)
-
-st.divider()
-
-# --- Crack spreads historiques ---
-st.subheader("Crack spreads historiques — Diesel & Kerosene")
-
-df_cracks = df_brent.rename(columns={"prix": "Brent"})
-df_cracks = df_cracks.merge(
-    df_diesel.rename(columns={"prix": "Diesel"}), on="date", how="left"
-)
-df_cracks = df_cracks.merge(
-    df_kerosene.rename(columns={"prix": "Kerosene"}), on="date", how="left"
-)
-df_cracks["Diesel crack"]   = df_cracks["Diesel"]   - df_cracks["Brent"]
-df_cracks["Kerosene crack"] = df_cracks["Kerosene"] - df_cracks["Brent"]
-
-fig_crack = go.Figure()
-fig_crack.add_trace(go.Scatter(
-    x=df_cracks["date"], y=df_cracks["Diesel crack"],
-    name="Diesel crack", line=dict(color="#3498db", width=2)
-))
-fig_crack.add_trace(go.Scatter(
-    x=df_cracks["date"], y=df_cracks["Kerosene crack"],
-    name="Kerosene crack", line=dict(color="#2ecc71", width=2)
-))
-fig_crack.add_hline(y=0, line_dash="dash", line_color="red")
-fig_crack.update_layout(
-    yaxis_title="$/bbl vs Brent",
-    hovermode="x unified"
-)
-st.plotly_chart(fig_crack, use_container_width=True)
-
-st.divider()
-
 # --- MBR reconstituée ---
-# Titre dynamique selon le mix choisi
-parts = [f"{nom} {round(f*100)}%" for nom, f in mix.items() if f > 0]
+parts     = [f"{nom} {round(f*100)}%" for nom, f in mix.items() if f > 0]
 titre_mix = " / ".join(parts)
 
 st.subheader("MBR reconstituée sur la période")
@@ -147,10 +104,7 @@ fig_mbr.add_hline(
     y=0, line_dash="dash", line_color="red",
     annotation_text="Seuil rentabilité"
 )
-fig_mbr.update_layout(
-    yaxis_title="$/bbl",
-    hovermode="x unified"
-)
+fig_mbr.update_layout(yaxis_title="$/bbl", hovermode="x unified")
 st.plotly_chart(fig_mbr, use_container_width=True)
 
 col1, col2, col3 = st.columns(3)
@@ -159,5 +113,91 @@ col2.metric("MBR max",     f"{df_mbr['MBR'].max():.2f} $/bbl")
 col3.metric("MBR min",     f"{df_mbr['MBR'].min():.2f} $/bbl")
 
 st.divider()
-st.caption("⚠️ Prix indicatifs — Brent, Diesel et Kerosene via EIA. Autres produits estimés par différentiel fixe sur le Brent.")
 
+# --- Prix historique du brut ou du mix ---
+# Calcul du prix moyen pondéré du mix jour par jour
+DIFFERENTIELS = {
+    "Brent":        0.0,
+    "Urals":       -15.0,
+    "Arab Light":  -4.0,
+    "Sahara Blend": 3.0,
+}
+
+df_prix_mix = df_brent.copy()
+df_prix_mix["prix_mix"] = df_prix_mix["prix"].apply(
+    lambda brent: sum(
+        (brent + DIFFERENTIELS[nom]) * fraction
+        for nom, fraction in mix.items()
+        if fraction > 0
+    )
+)
+
+st.subheader(f"Prix du brut/mix — {jours} derniers jours")
+st.caption(f"Mix : {titre_mix}")
+
+fig_prix = go.Figure()
+
+# Une courbe par brut actif dans le mix
+couleurs = {
+    "Brent":        "#f39c12",
+    "Urals":        "#e74c3c",
+    "Arab Light":   "#3498db",
+    "Sahara Blend": "#2ecc71",
+}
+for nom, fraction in mix.items():
+    if fraction > 0:
+        fig_prix.add_trace(go.Scatter(
+            x=df_brent["date"],
+            y=df_brent["prix"] + DIFFERENTIELS[nom],
+            name=f"{nom} ({round(fraction*100)}%)",
+            line=dict(color=couleurs[nom], width=1, dash="dot"),
+            opacity=0.6,
+        ))
+
+# Courbe du prix moyen pondéré du mix
+fig_prix.add_trace(go.Scatter(
+    x=df_prix_mix["date"],
+    y=df_prix_mix["prix_mix"],
+    name="Prix mix pondéré",
+    line=dict(color="white", width=2),
+))
+
+fig_prix.update_layout(
+    yaxis_title="$/bbl",
+    hovermode="x unified"
+)
+st.plotly_chart(fig_prix, use_container_width=True)
+
+st.divider()
+
+# --- Crack spreads historiques ---
+st.subheader("Crack spreads historiques — Diesel & Kerosene")
+
+df_cracks = df_brent.rename(columns={"prix": "Brent"})
+df_cracks = df_cracks.merge(
+    df_diesel.rename(columns={"prix": "Diesel"}), on="date", how="left"
+)
+df_cracks = df_cracks.merge(
+    df_kerosene.rename(columns={"prix": "Kerosene"}), on="date", how="left"
+)
+df_cracks["Diesel crack"]   = df_cracks["Diesel"]   - df_cracks["Brent"]
+df_cracks["Kerosene crack"] = df_cracks["Kerosene"] - df_cracks["Brent"]
+
+fig_crack = go.Figure()
+fig_crack.add_trace(go.Scatter(
+    x=df_cracks["date"], y=df_cracks["Diesel crack"],
+    name="Diesel crack", line=dict(color="#3498db", width=2)
+))
+fig_crack.add_trace(go.Scatter(
+    x=df_cracks["date"], y=df_cracks["Kerosene crack"],
+    name="Kerosene crack", line=dict(color="#2ecc71", width=2)
+))
+fig_crack.add_hline(y=0, line_dash="dash", line_color="red")
+fig_crack.update_layout(
+    yaxis_title="$/bbl vs Brent",
+    hovermode="x unified"
+)
+st.plotly_chart(fig_crack, use_container_width=True)
+
+st.divider()
+st.caption("⚠️ Prix indicatifs — Brent, Diesel et Kerosene via EIA. Autres produits estimés par différentiel fixe sur le Brent.")
