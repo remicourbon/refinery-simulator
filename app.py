@@ -4,7 +4,8 @@ import streamlit as st
 st.set_page_config(
     page_title="Refinery Simulator",
     page_icon="🛢️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 st.title("🛢️ Refinery Simulator")
@@ -12,10 +13,7 @@ st.caption("Simulateur de marge de raffinage — Brent, Urals, Arab Light, Sahar
 
 st.divider()
 
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("""
+st.markdown("""
 ### Ce que fait ce simulateur
 
 Ce projet modélise le fonctionnement complet d'une raffinerie de pétrole —
@@ -26,8 +24,7 @@ Il est construit sur un moteur de **bilan matière** réaliste :
 différenciés par brut, et des prix réels récupérés via l'API EIA.
 """)
 
-with col2:
-    st.markdown("""
+st.markdown("""
 ### Les 4 pages
 
 | Page | Objectif |

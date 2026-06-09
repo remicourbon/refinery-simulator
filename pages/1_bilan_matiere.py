@@ -46,38 +46,34 @@ else:
 
 st.subheader(f"{config.name} — {titre}")
 
-col1, col2 = st.columns(2)
-col1.metric("CDU", f"{config.cdu_capacity_kbd} kbd")
-col2.metric("Configuration", config.name)
+# col1, col2 = st.columns(2)
+# col1.metric("CDU", f"{config.cdu_capacity_kbd} kbd")
+# col2.metric("Configuration", config.name)
+
+
+
+st.subheader("Configuration des unités")
+unites = [
+    {"Unité": "CDU",   "Active": "✅",                              "Capacité (kbd)": config.cdu_capacity_kbd,                                "Rôle": "Distillation atmosphérique"},
+    {"Unité": "VDU",   "Active": "✅" if config.vdu_active   else "❌", "Capacité (kbd)": config.vdu_capacity_kbd   if config.vdu_active   else 0, "Rôle": "Distillation sous vide"},
+    {"Unité": "FCCU",  "Active": "✅" if config.fccu_active  else "❌", "Capacité (kbd)": config.fccu_capacity_kbd  if config.fccu_active  else 0, "Rôle": "Craquage catalytique"},
+    {"Unité": "HCU",   "Active": "✅" if config.hcu_active   else "❌", "Capacité (kbd)": config.hcu_capacity_kbd   if config.hcu_active   else 0, "Rôle": "Hydrocraquage"},
+    {"Unité": "Coker", "Active": "✅" if config.coker_active else "❌", "Capacité (kbd)": config.coker_capacity_kbd if config.coker_active else 0, "Rôle": "Cokéfaction"},
+]
+df_unites = pd.DataFrame(unites).set_index("Unité")
+st.dataframe(df_unites, use_container_width=True)
 
 st.divider()
 
-col_left, col_right = st.columns(2)
-
-with col_left:
-    st.subheader("Configuration des unités")
-    unites = [
-        {"Unité": "CDU",   "kbd": config.cdu_capacity_kbd, "Active": "✅"},
-        {"Unité": "VDU",   "kbd": config.vdu_capacity_kbd   if config.vdu_active   else 0, "Active": "✅" if config.vdu_active   else "❌"},
-        {"Unité": "FCCU",  "kbd": config.fccu_capacity_kbd  if config.fccu_active  else 0, "Active": "✅" if config.fccu_active  else "❌"},
-        {"Unité": "HCU",   "kbd": config.hcu_capacity_kbd   if config.hcu_active   else 0, "Active": "✅" if config.hcu_active   else "❌"},
-        {"Unité": "Coker", "kbd": config.coker_capacity_kbd if config.coker_active else 0, "Active": "✅" if config.coker_active else "❌"},
-    ]
-    df_unites = pd.DataFrame(unites).set_index("Unité")
-    st.dataframe(df_unites, use_container_width=True)
-
-with col_right:
-    st.subheader("Mass balance")
-    df_display = df[["%mt", "%vol", "kbd"]].copy()
-    total = pd.DataFrame([{
-        "%mt":  round(df_display["%mt"].sum(), 1),
-        "%vol": round(df_display["%vol"].sum(), 1),
-        "kbd":  round(df_display["kbd"].sum(), 2),
-    }], index=["Total"])
-    df_display = pd.concat([df_display, total])
-    st.dataframe(df_display, use_container_width=True)
-
-st.divider()
+st.subheader("Mass balance")
+df_display = df[["%mt", "%vol", "kbd"]].copy()
+total = pd.DataFrame([{
+    "%mt":  round(df_display["%mt"].sum(), 1),
+    "%vol": round(df_display["%vol"].sum(), 1),
+    "kbd":  round(df_display["kbd"].sum(), 2),
+}], index=["Total"])
+df_display = pd.concat([df_display, total])
+st.dataframe(df_display, use_container_width=True)
 
 st.subheader("Répartition en %mt")
 fig = px.bar(
