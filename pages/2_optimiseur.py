@@ -1,7 +1,7 @@
 # pages/2_optimiseur.py
 import streamlit as st
 import plotly.express as px
-from refinery.optimizer import optimiser_mix, calcul_soufre_mix
+from refinery.optimizer import optimiser_mix
 from refinery.sidebar import render_sidebar
 from data.crudes import CRUDES
 
@@ -64,7 +64,12 @@ if st.button("🚀 Lancer l'optimisation"):
             mix_max=mix_max / 100,
         )
 
-    mix = resultat["mix"]
+    # Filtrer les bruts négligeables et renormaliser à 100%
+    mix_brut   = resultat["mix"]
+    mix_filtre = {k: v for k, v in mix_brut.items() if v > 0.01}
+    total      = sum(mix_filtre.values())
+    mix        = {k: round(v / total, 3) for k, v in mix_filtre.items()}
+
     mbr = resultat["mbr"]
 
     col1, col2, col3 = st.columns(3)
@@ -75,18 +80,20 @@ if st.button("🚀 Lancer l'optimisation"):
     st.divider()
 
     st.subheader("Composition du mix optimal")
+    total_pct = 0
     for nom, fraction in mix.items():
-        if fraction > 0.01:
-            prix   = CRUDES[nom].price_usd_bbl
-            soufre = CRUDES[nom].sulfur_pct
-            st.write(f"**{nom}** : {round(fraction * 100, 1)}% — {prix} $/bbl — {soufre}% S")
+        prix   = CRUDES[nom].price_usd_bbl
+        soufre = CRUDES[nom].sulfur_pct
+        pct    = round(fraction * 100, 1)
+        total_pct += pct
+        st.write(f"**{nom}** : {pct}% — {prix} $/bbl — {soufre}% S")
+    st.write(f"**Total : {round(total_pct, 1)}%**")
 
     st.divider()
 
-    mix_filtre = {k: v for k, v in mix.items() if v > 0.01}
     fig = px.pie(
-        values=list(mix_filtre.values()),
-        names=list(mix_filtre.keys()),
+        values=list(mix.values()),
+        names=list(mix.keys()),
         title=f"Mix optimal — {config.name} — Soufre max {soufre_max}%",
     )
     st.plotly_chart(fig, use_container_width=True)

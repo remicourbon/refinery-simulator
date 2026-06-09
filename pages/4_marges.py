@@ -6,34 +6,27 @@ import pandas as pd
 from data.prices import (get_historique_brent, get_prix_bruts,
                          get_prix_produits_eia, get_historique_produit)
 from refinery.optimizer import calcul_mbr
-from refinery.sidebar import render_sidebar
+from refinery.sidebar import render_sidebar, render_mix_sidebar
 
 st.title("📈 Évolution des marges")
 st.caption("Prix réels EIA — historique Brent, crack spreads et MBR reconstituée")
 
 config = render_sidebar()
+mix    = render_mix_sidebar()
 
 with st.sidebar:
     st.divider()
     st.header("Paramètres")
     jours = st.slider("Historique (jours)", 30, 365, 90, 30)
 
-# Mix fixe pour la reconstitution historique
-MIX_REFERENCE = {
-    "Brent":        0.10,
-    "Urals":        0.60,
-    "Arab Light":   0.20,
-    "Sahara Blend": 0.10,
-}
-
 st.divider()
 
 with st.spinner("Récupération des prix EIA..."):
-    df_brent        = get_historique_brent(jours)
-    prix_bruts      = get_prix_bruts()
-    prix_produits   = get_prix_produits_eia()
-    df_diesel       = get_historique_produit("Diesel",   jours)
-    df_kerosene     = get_historique_produit("Kerosene", jours)
+    df_brent      = get_historique_brent(jours)
+    prix_bruts    = get_prix_bruts()
+    prix_produits = get_prix_produits_eia()
+    df_diesel     = get_historique_produit("Diesel",   jours)
+    df_kerosene   = get_historique_produit("Kerosene", jours)
 
 # --- Prix actuels ---
 st.subheader("Prix actuels")
@@ -76,7 +69,6 @@ st.divider()
 # --- Crack spreads historiques ---
 st.subheader("Crack spreads historiques — Diesel & Kerosene")
 
-# Fusionner Diesel et Kerosene sur les mêmes dates
 df_cracks = df_brent.rename(columns={"prix": "Brent"})
 df_cracks = df_cracks.merge(
     df_diesel.rename(columns={"prix": "Diesel"}), on="date", how="left"
@@ -106,8 +98,12 @@ st.plotly_chart(fig_crack, use_container_width=True)
 st.divider()
 
 # --- MBR reconstituée ---
+# Titre dynamique selon le mix choisi
+parts = [f"{nom} {round(f*100)}%" for nom, f in mix.items() if f > 0]
+titre_mix = " / ".join(parts)
+
 st.subheader("MBR reconstituée sur la période")
-st.caption("Mix de référence : Urals 60% / Arab Light 20% / Brent 10% / Sahara 10%")
+st.caption(f"Mix : {titre_mix}")
 st.caption("Prix produits : Diesel et Kerosene réels EIA, autres en différentiel fixe")
 
 mbrs = []
@@ -116,8 +112,8 @@ for _, row in df_brent.iterrows():
     prix_bruts_jour = {
         "Brent":        brent,
         "Urals":        brent - 15.0,
-        "Arab Light":   brent - 4.0,
-        "Sahara Blend": brent + 3.0,
+        "Arab Light":   brent -  4.0,
+        "Sahara Blend": brent +  3.0,
     }
     prix_produits_jour = {
         "LPG":      brent - 10.0,
@@ -130,7 +126,7 @@ for _, row in df_brent.iterrows():
         "Pet_coke": brent - 55.0,
     }
     mbr = calcul_mbr(
-        mix=MIX_REFERENCE,
+        mix=mix,
         config=config,
         prix_bruts=prix_bruts_jour,
         prix_produits=prix_produits_jour,
@@ -164,3 +160,4 @@ col3.metric("MBR min",     f"{df_mbr['MBR'].min():.2f} $/bbl")
 
 st.divider()
 st.caption("⚠️ Prix indicatifs — Brent, Diesel et Kerosene via EIA. Autres produits estimés par différentiel fixe sur le Brent.")
+
