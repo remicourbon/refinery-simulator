@@ -1,123 +1,188 @@
 """
 refinery/balance.py
 -------------------
-Pattern pool : chaque unité dépose ses sorties, la suivante pioche sa charge.
-Rien ne se perd — ce qui n'est pas valorisé devient HSFO.
+Moteur de bilan matière.
 
-Règles :
-  - CDU : toujours active, capacité paramétrable
-  - VDU : optionnelle, limitée par sa capacité
-  - FCCU + HCU : optionnels, reçoivent le VGO proportionnellement à leurs capacités
-  - Coker : optionnel, traite le résidu vide
-  - Tout flux sans preneur → HSFO
+Séquence d'exécution :
+  CDU → VDU → [répartition VGO] → FCCU / HCU → Coker → Reformer → FO_Blender
+
+Règles de conservation :
+  - Rien ne se crée ni ne disparaît
+  - Tout flux sans preneur devient HSFO
+  - isBalanced() vérifié après chaque unité (tolérance configurable)
 """
 
 import pandas as pd
-from refinery.units import run_cdu, run_vdu, run_fccu, run_hcu, run_coker, BBL_PER_TON
+from collections import OrderedDict
 
-M3_TO_BBL = 6.2898
+from refinery.units import (
+    CDU, VDU, FCCU, HCU, COKER, REFORMER, FO_BLENDER,
+    RefineryState, BBL_PER_TON, kbd_to_t_h, M3_TO_BBL,
+)
 
-def _kbd_to_t_h(kbd, density):
-    """Convertit une capacité en kbd en t/h."""
-    return kbd * 1000 / 24 / M3_TO_BBL * density
 
+# ---------------------------------------------------------------------------
+# Helpers internes
+# ---------------------------------------------------------------------------
+
+def _split_vgo(state: RefineryState, cap_fccu: float, cap_hcu: float) -> None:
+    """
+    Répartit le VGO entre FCCU et HCU proportionnellement aux capacités.
+    Chaque unité piochera ensuite dans son propre slot du pool.
+    Le surplus (si les deux sont inactives) reste en HSFO.
+    """
+    vgo = state.pool.pop("vgo", 0.0)
+    cap_total = cap_fccu + cap_hcu
+
+    if cap_total > 0 and vgo > 0:
+        state.pool["vgo_fccu"] = vgo * cap_fccu / cap_total
+        state.pool["vgo_hcu"]  = vgo * cap_hcu  / cap_total
+    else:
+        state.output.HSFO += vgo
+
+
+def _flush_pool_to_hsfo(state: RefineryState) -> None:
+    """
+    Tout ce qui reste dans le pool en fin de chaîne n'a pas trouvé preneur.
+    On le bascule en HSFO pour maintenir la conservation de la masse.
+    """
+    for key in list(state.pool.keys()):
+        state.output.HSFO += state.pool.pop(key)
+
+
+# ---------------------------------------------------------------------------
+# Fonction principale
+# ---------------------------------------------------------------------------
 
 def run_balance(crude, config) -> pd.DataFrame:
     """
-    Calcule le bilan matière complet.
-    Tous les flux sont tracés — rien ne disparaît.
+    Calcule le bilan matière complet pour un brut et une configuration donnés.
+
+    Parameters
+    ----------
+    crude  : objet Crude (density, yields, sulfur_pct, ...)
+    config : objet RefineryConfig
+
+    Returns
+    -------
+    pd.DataFrame avec index = produits, colonnes = [%mt, %vol, kbd]
     """
 
-    # Pool des produits finis — commence à zéro
-    pool = {
-        "LPG":      0.0,
-        "Naphtha":  0.0,
-        "Kerosene": 0.0,
-        "Gasoil":   0.0,
-        "Diesel":   0.0,
-        "Gasoline": 0.0,
-        "HSFO":     0.0,
-        "Pet_coke": 0.0,
-    }
+    # Charge initiale (t/h)
+    total_input = kbd_to_t_h(config.cdu_capacity_kbd, crude.density)
+    state = RefineryState(total_input_t_h=total_input)
 
-    # ÉTAPE 1 — CDU (toujours active)
-    cdu_t_h = _kbd_to_t_h(config.cdu_capacity_kbd, crude.density)
-    cdu = run_cdu(cdu_t_h, crude)
-    pool["LPG"]      += cdu["LPG"]
-    pool["Naphtha"]  += cdu["Naphtha"]
-    pool["Kerosene"] += cdu["Kerosene"]
-    pool["Gasoil"]   += cdu["Gasoil"]
-    atm_resid = cdu["Atm_resid"]
+    # ------------------------------------------------------------------
+    # Construction de la séquence d'unités (OrderedDict pour garder l'ordre)
+    # ------------------------------------------------------------------
+    units: OrderedDict = OrderedDict()
 
-    # ÉTAPE 2 — VDU
+    # CDU — toujours active
+    units["CDU"] = CDU(max_rate_kbd=config.cdu_capacity_kbd)
+
+    # VDU
     if config.vdu_active:
-        vdu_max_t_h = _kbd_to_t_h(config.vdu_capacity_kbd, crude.density)
-        vdu_charge  = min(atm_resid, vdu_max_t_h)
-        vdu_surplus = atm_resid - vdu_charge
-        vdu = run_vdu(vdu_charge, crude)
-        vgo       = vdu["VGO"]
-        vac_resid = vdu["Vac_resid"]
-        pool["HSFO"] += vdu_surplus
-    else:
-        vgo       = 0.0
-        vac_resid = 0.0
-        pool["HSFO"] += atm_resid
+        units["VDU"] = VDU(max_rate_kbd=config.vdu_capacity_kbd)
 
-    # ÉTAPE 3 — Répartition du VGO entre FCCU et HCU
+    # FCCU
+    if config.fccu_active:
+        fccu = FCCU(
+            max_rate_kbd=config.fccu_capacity_kbd,
+            sulfur_max=getattr(config, "fccu_sulfur_max", 999.0),
+        )
+        if hasattr(config, "yield_mode"):
+            fccu.set_default(config.yield_mode)
+        units["FCCU"] = fccu
+
+    # HCU
+    if config.hcu_active:
+        hcu = HCU(
+            max_rate_kbd=config.hcu_capacity_kbd,
+            sulfur_max=getattr(config, "hcu_sulfur_max", 999.0),
+        )
+        if hasattr(config, "yield_mode"):
+            hcu.set_default(config.yield_mode)
+        units["HCU"] = hcu
+
+    # Coker
+    if config.coker_active:
+        coker = COKER(max_rate_kbd=config.coker_capacity_kbd)
+        if hasattr(config, "yield_mode"):
+            coker.set_default(config.yield_mode)
+        units["Coker"] = coker
+
+    # Reformer
+    if getattr(config, "reformer_active", False):
+        reformer = REFORMER(max_rate_kbd=getattr(config, "reformer_capacity_kbd", 0.0))
+        if hasattr(config, "yield_mode"):
+            reformer.set_default(config.yield_mode)
+        units["Reformer"] = reformer
+
+    # FO Blender — toujours actif (gère les fonds de barril)
+    units["FO_Blender"] = FO_BLENDER(
+        fo_cut_ratio=getattr(config, "fo_cut_ratio", 0.20)
+    )
+
+    # ------------------------------------------------------------------
+    # Exécution de la chaîne
+    # ------------------------------------------------------------------
+
+    # Cas spécial : répartition VGO avant FCCU/HCU
     cap_fccu = config.fccu_capacity_kbd if config.fccu_active else 0.0
     cap_hcu  = config.hcu_capacity_kbd  if config.hcu_active  else 0.0
-    cap_conv = cap_fccu + cap_hcu
 
-    if cap_conv > 0 and vgo > 0:
-        vgo_fccu = vgo * (cap_fccu / cap_conv)
-        vgo_hcu  = vgo * (cap_hcu  / cap_conv)
-    else:
-        vgo_fccu = 0.0
-        vgo_hcu  = 0.0
+    for name, unit in units.items():
 
-    pool["HSFO"] += vgo - vgo_fccu - vgo_hcu
+        # Juste avant FCCU : répartir le VGO entre FCCU et HCU
+        if name == "FCCU":
+            _split_vgo(state, cap_fccu, cap_hcu)
 
-    # ÉTAPE 4 — FCCU
-    if config.fccu_active and vgo_fccu > 0:
-        fccu = run_fccu(vgo_fccu)
-        pool["LPG"]      += fccu["LPG"]
-        pool["Gasoline"] += fccu["Gasoline"]
-        pool["Gasoil"]   += fccu["LCO"]
-        pool["HSFO"]     += fccu["Slurry"]
+        # Avant le Reformer : alimenter son pool avec le Naphtha accumulé
+        if name == "Reformer":
+            naphtha_to_reform = state.output.Naphtha
+            state.output.Naphtha = 0.0
+            state.pool["reformer_feed"] = naphtha_to_reform
 
-    # ÉTAPE 5 — HCU
-    if config.hcu_active and vgo_hcu > 0:
-        hcu = run_hcu(vgo_hcu)
-        pool["LPG"]      += hcu["LPG"]
-        pool["Naphtha"]  += hcu["Naphtha"]
-        pool["Kerosene"] += hcu["Kerosene"]
-        pool["Diesel"]   += hcu["Diesel"]
-        pool["HSFO"]     += hcu["Resid"]
+        unit.process_unit(crude=crude, state=state)
 
-    # ÉTAPE 6 — Coker
-    if config.coker_active and vac_resid > 0:
-        coker_max_t_h = _kbd_to_t_h(config.coker_capacity_kbd, crude.density)
-        coker_charge  = min(vac_resid, coker_max_t_h)
-        coker_surplus = vac_resid - coker_charge
-        coker = run_coker(coker_charge)
-        pool["LPG"]      += coker["LPG"]
-        pool["Naphtha"]  += coker["Naphtha"]
-        pool["Gasoil"]   += coker["Gasoil"]
-        pool["Pet_coke"] += coker["Pet_coke"]
-        pool["HSFO"]     += coker_surplus
-    else:
-        pool["HSFO"] += vac_resid
+        # Vérification conservation de la masse
+        if not state.is_balanced(eps=max(total_input * 0.02, 1.0)):
+            raise ValueError(
+                f"Bilan non équilibré après {name} : "
+                f"input={state.input:.2f} t/h, "
+                f"total={state.total():.2f} t/h, "
+                f"écart={state.residual():.2f} t/h"
+            )
 
-# ÉTAPE 7 — Mise en forme
-    total_t_h   = sum(pool.values())
-    # kbd entrants = capacité CDU convertie en kbd réels
-    kbd_entrant = _kbd_to_t_h(config.cdu_capacity_kbd, crude.density) / crude.density * M3_TO_BBL * 24 / 1000
+    # Coker HGO restant → HSFO si pas de HCU pour le prendre
+    state.pool["vac_tar_spill"] = state.pool.pop("coker_hgo", 0.0)
+
+    # Tout ce qui reste dans le pool → HSFO
+    _flush_pool_to_hsfo(state)
+
+    # ------------------------------------------------------------------
+    # Mise en forme du résultat
+    # ------------------------------------------------------------------
+    output_dict = state.output.as_dict()
+    total_t_h   = state.output.total()
+
+    # Débit entrant en kbd (pour le calcul %vol)
+    kbd_entrant = total_input / crude.density * M3_TO_BBL * 24 / 1000
 
     rows = []
-    for produit, t_h in pool.items():
-        pct_mt  = 100 * t_h / total_t_h if total_t_h > 0 else 0
-        kbd     = t_h * BBL_PER_TON.get(produit, 7.45) * 24 / 1000
-        pct_vol = 100 * kbd / kbd_entrant if kbd_entrant > 0 else 0
+    for produit, t_h in output_dict.items():
+        if total_t_h > 0:
+            pct_mt = 100 * t_h / total_t_h
+        else:
+            pct_mt = 0.0
+
+        kbd = t_h * BBL_PER_TON.get(produit, 7.45) * 24 / 1000
+
+        if kbd_entrant > 0:
+            pct_vol = 100 * kbd / kbd_entrant
+        else:
+            pct_vol = 0.0
+
         rows.append({
             "Produit": produit,
             "%mt":     round(pct_mt, 1),

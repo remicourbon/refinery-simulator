@@ -46,11 +46,6 @@ else:
 
 st.subheader(f"{config.name} — {titre}")
 
-# col1, col2 = st.columns(2)
-# col1.metric("CDU", f"{config.cdu_capacity_kbd} kbd")
-# col2.metric("Configuration", config.name)
-
-
 
 st.subheader("Configuration des unités")
 unites = [
